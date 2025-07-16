@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from .relighting.tonemapper import TonemapHDR
+from HDRutils.exposures import estimate_exposures
 
 def create_envmap_grid(size: int):
     """
@@ -109,32 +110,55 @@ class exposure_to_hdr:
 
     FUNCTION = "exposuretohdr"
 
-    def exposuretohdr(self, images, gamma):     
-        first_image = torch.pow(images[0], gamma)
-        evs = [0.0, -2.5, -5.0]
-        hdr2ldr = TonemapHDR(gamma=gamma, percentile=99, max_mapping=0.9)
-        scaler = torch.tensor([0.212671, 0.715160, 0.072169])
-        
-        # read luminace for every image
-        luminances = []
-        for i in range(len(evs)):
-            linear_img = torch.pow(images[i], gamma)
-            linear_img = linear_img * 1 / (2** evs[i])
-            # compute luminace
-            lumi = linear_img @ scaler
-            luminances.append(lumi)
+    def exposuretohdr(self, images, gamma):
+        NOISE = 4
+        SAT_F = 1.0
+        images_np = images.detach().cpu().numpy()
+        dtype = np.uint16
+        dtype_max = np.iinfo(dtype).max
+        imgs_uint = np.clip(images_np * dtype_max, 0, dtype_max).astype(dtype)
 
-        # start from darkest image
-        out_luminace = luminances[len(evs) - 1]
-        for i in range(len(evs) - 1, 0, -1):
-            # compute mask
-            maxval = 1 / (2 ** evs[i-1])
-            p1 = torch.clip((luminances[i-1] - 0.9 * maxval) / (0.1 * maxval), 0, 1)
-            p2 = out_luminace > luminances[i-1]
-            mask = (p1 * p2)
-            out_luminace = luminances[i-1] * (1-mask) + out_luminace * mask
-        
-        hdr_rgb = first_image * (out_luminace / (luminances[0] + 1e-10)).unsqueeze(-1)
+        H, W, _ = imgs_uint[0].shape
+
+        luma = (
+            0.2126 * imgs_uint[..., 0] +
+            0.7152 * imgs_uint[..., 1] +
+            0.0722 * imgs_uint[..., 2]
+        ).astype(dtype)
+
+        metadata = {
+            'black_level':      np.zeros(4, dtype=int),
+            'saturation_point': dtype_max * SAT_F,
+            'dtype':            dtype,
+            'h':                H,
+            'w':                W
+        }
+
+        dummy = np.ones(len(imgs_uint), dtype=np.float32)
+        exp = estimate_exposures(luma, dummy, metadata, 'mst', noise_floor=NOISE)
+
+        imgs_lin = imgs_uint.astype(np.float32) / dtype_max
+
+        def srgb_to_linear(c):
+            mask = c <= 0.04045
+            return np.where(mask, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+        rad = np.zeros_like(imgs_lin[0], dtype=np.float32)
+        wgt = np.zeros_like(imgs_lin[0], dtype=np.float32)
+
+        for im, t in zip(imgs_lin, exp):
+            valid = (im > (NOISE / dtype_max)) & (im < SAT_F)
+            w = np.where(im <= 0.5, im, 1.0 - im)
+            w *= valid.astype(np.float32)
+            rad += w * (im / t)
+            wgt += w
+
+        hdr = rad / (wgt + 1e-6)
+        hdr /= hdr.max()
+        hdr = srgb_to_linear(hdr)
+
+        hdr_rgb = torch.from_numpy(hdr)
+        hdr2ldr = TonemapHDR(gamma=gamma, percentile=99, max_mapping=0.9)
         ldr_rgb, _, _ = hdr2ldr(hdr_rgb)
 
         hrd_rgb = hdr_rgb.unsqueeze(0).cpu().to(torch.float32)
