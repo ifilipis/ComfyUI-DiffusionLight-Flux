@@ -101,13 +101,13 @@ class exposure_to_hdr:
             "required": {
                 "images": ("IMAGE", ),
                 #"EV": ("FLOAT", {"default": 0, "min": 1, "max": 30, "step": 1}, ),
-                "gamma": ("FLOAT", {"default": 2.4, "min": 1, "max": 30, "step": 0.01}, ),
+                "gamma": ("FLOAT", {"default": 2.2, "min": 1, "max": 30, "step": 0.01}, ),
             },
         }
         
     CATEGORY = "DiffusionLight"
     RETURN_TYPES = ("IMAGE", "IMAGE",)
-    RETURN_NAMES = ("hrd_image", "ldr_image", )
+    RETURN_NAMES = ("hdr_image", "ldr_image", )
 
     FUNCTION = "exposuretohdr"
 
@@ -162,10 +162,10 @@ class exposure_to_hdr:
         hdr2ldr = TonemapHDR(gamma=gamma, percentile=99, max_mapping=0.9)
         ldr_rgb, _, _ = hdr2ldr(hdr_rgb)
 
-        hrd_rgb = hdr_rgb.unsqueeze(0).cpu().to(torch.float32)
+        hdr_rgb = hdr_rgb.unsqueeze(0).cpu().to(torch.float32)
         ldr_rgb = ldr_rgb.unsqueeze(0).cpu().to(torch.float32)
 
-        return (hrd_rgb, ldr_rgb,)
+        return (hdr_rgb, ldr_rgb,)
 
 
 class SaveImageOpenEXR:
@@ -203,7 +203,7 @@ class SaveImageOpenEXR:
     RETURN_NAMES = ("file_url",)
     FUNCTION = "saveexr"
     OUTPUT_NODE = True
-    CATEGORY = "Marigold"
+    CATEGORY = "DiffusionLight"
 
     def saveexr(self, images, filename_prefix):
         import re
@@ -256,5 +256,5 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "chrome_ball_to_envmap": "Chrome Ball to Envmap",
     "exposure_to_hdr": "Exposure to HDR",
-    "SaveImageOpenEXR": "Save Image OpenEXR",
+    "SaveImageOpenEXR": "Save Image as OpenEXR",
 }
